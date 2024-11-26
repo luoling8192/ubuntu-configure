@@ -2,24 +2,73 @@
 
 configure_ssh() {
     echo -e "${GREEN}Configuring SSH server...${NC}"
-    local config_file="/etc/ssh/sshd_config"
     
-    # Fix sed commands by properly escaping quotes and using correct syntax
-    handle_error "sudo sed -i 's/^#Port 22/Port 22/' $config_file" "Failed to configure SSH port"
-    handle_error "sudo sed -i 's/^#PubkeyAuthentication yes/PubkeyAuthentication yes/' $config_file" "Failed to enable SSH key authentication" 
-    handle_error "sudo sed -i 's/^#ClientAliveInterval 0/ClientAliveInterval 60/' $config_file" "Failed to set client alive interval"
-    handle_error "sudo sed -i 's/^#ClientAliveCountMax 3/ClientAliveCountMax 3/' $config_file" "Failed to set client alive count"
+    if confirm "Configure SSH server settings?"; then
+        local config_file="/etc/ssh/sshd_config"
+        
+        # Use double quotes to avoid sed expression errors
+        echo 'Port 22' | sudo tee -a $config_file > /dev/null
+        echo 'PubkeyAuthentication yes' | sudo tee -a $config_file > /dev/null
+        echo 'ClientAliveInterval 60' | sudo tee -a $config_file > /dev/null
+        echo 'ClientAliveCountMax 3' | sudo tee -a $config_file > /dev/null
+    fi
 
-    setup_ssh_keys
-    restart_ssh
+    if confirm "Set up SSH keys?"; then
+        setup_ssh_keys
+    fi
+
+    if confirm "Configure GitHub SSH access?"; then
+        setup_github_ssh
+    fi
+
+    if confirm "Restart SSH service?"; then
+        restart_ssh
+    fi
 }
 
 setup_ssh_keys() {
     echo -e "${GREEN}Setting up SSH keys...${NC}"
-    handle_error "mkdir -p $HOME/.ssh" "Failed to create SSH directory"
-    handle_error "curl -fsSL https://github.com/$GITHUB_USER.keys -o $HOME/.ssh/authorized_keys" "Failed to download SSH keys"
-    handle_error "chmod 700 $HOME/.ssh" "Failed to set SSH directory permissions"
-    handle_error "chmod 600 $HOME/.ssh/authorized_keys" "Failed to set SSH key permissions"
+    
+    if confirm "Create SSH directory and download authorized keys?"; then
+        handle_error "mkdir -p $HOME/.ssh" "Failed to create SSH directory"
+        handle_error "curl -fsSL https://github.com/$GITHUB_USER.keys -o $HOME/.ssh/authorized_keys" "Failed to download SSH keys"
+        handle_error "chmod 700 $HOME/.ssh" "Failed to set SSH directory permissions"
+        handle_error "chmod 600 $HOME/.ssh/authorized_keys" "Failed to set SSH key permissions"
+    fi
+
+    # Ask if user wants to generate new ed25519 key
+    if confirm "Generate new ed25519 SSH key?"; then
+        local commit_msg
+        read -p "Enter commit message for the key (default: hostname): " commit_msg
+        # Use hostname if no commit message provided
+        commit_msg=${commit_msg:-$(hostname)}
+        
+        # Generate ed25519 key with commit message as comment
+        handle_error "ssh-keygen -t ed25519 -C $commit_msg" "Failed to generate ed25519 key"
+        
+        # Print the public key
+        echo -e "\n${GREEN}Your new public key:${NC}"
+        cat "$HOME/.ssh/id_ed25519.pub"
+    fi
+}
+
+setup_github_ssh() {
+    echo -e "${GREEN}Setting up GitHub SSH config...${NC}"
+    local ssh_config="$HOME/.ssh/config"
+    local github_config="Host github.com
+    HostName ssh.github.com
+    User git
+    Port 443"
+    
+    if confirm "Configure GitHub SSH access over HTTPS port 443?"; then
+        if [ ! -f "$ssh_config" ] || ! grep -q "Host github.com" "$ssh_config"; then
+            # Add newline before config if file exists
+            [ -f "$ssh_config" ] && echo "" >> "$ssh_config"
+            echo "$github_config" >> "$ssh_config"
+        fi
+
+        handle_error "chmod 600 $ssh_config" "Failed to set SSH config permissions"
+    fi
 }
 
 restart_ssh() {
